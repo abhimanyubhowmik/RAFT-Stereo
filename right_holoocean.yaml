@@ -1,0 +1,28 @@
+# Camera calibration file generated for HoloOcean Right Camera (Simulated)
+# Based on: fx=525, fy=525, cx=160, cy=120, width=320, height=240, baseline=0.1 (Tx=-fx*B)
+image_width: 320
+image_height: 240
+camera_name: right_camera # Or cam1, etc.
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [160.0,   0.0, 160.0,
+           0.0, 160.0, 120.0,
+           0.0,   0.0,   1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+rectification_matrix: # Assuming perfectly rectified output from simulator
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0]
+projection_matrix: # P = [K | [-fx*baseline; 0; 0]] for right rectified camera
+  rows: 3
+  cols: 4
+  data: [160.0,   0.0, 160.0, -16.0, # Note: P[3] = Tx = -fx * baseline = -525.0 * 0.1 = -52.5
+           0.0, 160.0, 120.0,   0.0,
+           0.0,   0.0,   1.0,   0.0]

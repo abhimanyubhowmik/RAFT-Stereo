@@ -1,0 +1,8 @@
+# ninja log v6
+0	14939	1747397417423267490	/home/madhushree/RAFT-Stereo/sampler/build/temp.linux-x86_64-cpython-37/sampler.o	c6cd65649410dd0
+1	23905	1747397417423267490	/home/madhushree/RAFT-Stereo/sampler/build/temp.linux-x86_64-cpython-37/sampler_kernel.o	705f155dcfaddf4e
+4	30027	1747399701572689755	/home/madhushree/RAFT-Stereo/sampler/build/temp.linux-x86_64-cpython-37/sampler.o	9b7165d13dc9b189
+4	47440	1747399701572689755	/home/madhushree/RAFT-Stereo/sampler/build/temp.linux-x86_64-cpython-37/sampler_kernel.o	fa84d2b469079510
+13	20147	1747401204178669698	/home/madhushree/RAFT-Stereo/sampler/build/temp.linux-x86_64-cpython-37/sampler.o	9b7165d13dc9b189
+16	23147	1747404128106259160	/home/madhushree/RAFT-Stereo/sampler/build/temp.linux-x86_64-cpython-37/sampler.o	c6cd65649410dd0
+17	37475	1747404128106259160	/home/madhushree/RAFT-Stereo/sampler/build/temp.linux-x86_64-cpython-37/sampler_kernel.o	705f155dcfaddf4e

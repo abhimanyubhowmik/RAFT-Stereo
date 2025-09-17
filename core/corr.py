@@ -4,8 +4,10 @@ from core.utils.utils import bilinear_sampler
 
 try:
     import corr_sampler
+    CORR_SAMPLER_AVAILABLE = True
 except:
-    pass
+    CORR_SAMPLER_AVAILABLE = False
+    print("WARNING: corr_sampler module not available. Make sure it's properly installed for CUDA correlation implementation.")
 
 try:
     import alt_cuda_corr
@@ -17,12 +19,16 @@ except:
 class CorrSampler(torch.autograd.Function):
     @staticmethod
     def forward(ctx, volume, coords, radius):
+        if not CORR_SAMPLER_AVAILABLE:
+            raise ModuleNotFoundError("corr_sampler module is not available. Please install the CUDA correlation sampler or use a different correlation implementation.")
         ctx.save_for_backward(volume,coords)
         ctx.radius = radius
         corr, = corr_sampler.forward(volume, coords, radius)
         return corr
     @staticmethod
     def backward(ctx, grad_output):
+        if not CORR_SAMPLER_AVAILABLE:
+            raise ModuleNotFoundError("corr_sampler module is not available. Please install the CUDA correlation sampler or use a different correlation implementation.")
         volume, coords = ctx.saved_tensors
         grad_output = grad_output.contiguous()
         grad_volume, = corr_sampler.backward(volume, coords, grad_output, ctx.radius)

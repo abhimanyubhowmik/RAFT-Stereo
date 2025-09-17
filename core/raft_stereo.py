@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import kornia
 from core.update import BasicMultiUpdateBlock
 from core.extractor import BasicEncoder, MultiBasicEncoder, ResidualBlock
 from core.corr import CorrBlock1D, PytorchAlternateCorrBlock1D, CorrBlockFast1D, AlternateCorrBlock
@@ -65,6 +66,17 @@ class RAFTStereo(nn.Module):
         up_flow = torch.sum(mask * up_flow, dim=2)
         up_flow = up_flow.permute(0, 1, 4, 2, 5, 3)
         return up_flow.reshape(N, D, factor*H, factor*W)
+
+    def get_confidence(self, flow_low, fmap1, fmap2):
+            h, w = flow_low.shape[2:]        
+            flow_neg = flow_low.clone()
+            flow_neg[:,0:1,:,:] += torch.arange(w).view(1,1,1,w).to(flow_low.device)
+            flow_neg[:,1:2,:,:] += torch.arange(h).view(1,1,h,1).to(flow_low.device)
+            
+            fmap2 = fmap2.float()
+            fmap2_rect_warped = kornia.geometry.transform.remap(fmap2, flow_neg[:, 0], flow_neg[:, 1], align_corners=True)
+            corr_confidence = F.cosine_similarity(fmap1, fmap2_rect_warped, dim=1)
+            return corr_confidence
 
 
     def forward(self, image1, image2, iters=12, flow_init=None, test_mode=False):
@@ -136,6 +148,14 @@ class RAFTStereo(nn.Module):
             flow_predictions.append(flow_up)
 
         if test_mode:
-            return coords1 - coords0, flow_up
+            flow_low = coords1 - coords0
+            
+            corr_confidence = self.get_confidence(flow_low=flow_low, fmap1=fmap1, fmap2=fmap2)
+            if flow_init is not None:
+                prior_confidence = self.get_confidence(flow_low=flow_init, fmap1=fmap1, fmap2=fmap2)
+            else:
+                prior_confidence = None
+            
+            return coords1 - coords0, flow_up, corr_confidence, prior_confidence
 
         return flow_predictions
