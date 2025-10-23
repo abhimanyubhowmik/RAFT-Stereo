@@ -66,6 +66,8 @@ class RAFTStereoNode:
         # YAML path for intrinsics (left camera). Optionally ~right_camera_yaml to infer baseline
         self.camera_yaml = rospy.get_param('~left_camera_yaml', '')
         self.right_camera_yaml = rospy.get_param('~right_camera_yaml', '')
+        Tx_left = None
+        Tx_right = None
         if self.camera_yaml:
             try:
                 with open(self.camera_yaml, 'r') as f:
@@ -75,26 +77,34 @@ class RAFTStereoNode:
                 if K and len(K) == 9:
                     self.fx = float(K[0]); self.fy = float(K[4]); self.cx = float(K[2]); self.cy = float(K[5])
                 if P and len(P) == 12:
-                    # Try to compute baseline from Tx if provided (left P normally has Tx=0)
-                    Tx = float(P[3])
-                    if abs(Tx) > 0 and self.fx > 0:
-                        # Tx = -fx * baseline for right camera matrix
-                        self.baseline = -Tx / self.fx
-                rospy.loginfo('Loaded intrinsics from %s: fx=%.3f fy=%.3f cx=%.3f cy=%.3f baseline=%.6f', self.camera_yaml, self.fx, self.fy, self.cx, self.cy, self.baseline)
+                    Tx_left = float(P[3])
+                rospy.loginfo('Loaded left intrinsics from %s: fx=%.3f fy=%.3f cx=%.3f cy=%.3f Tx_left=%s', self.camera_yaml, self.fx, self.fy, self.cx, self.cy, str(Tx_left))
             except Exception as e:
                 rospy.logwarn('Failed to load camera intrinsics from %s: %s', self.camera_yaml, str(e))
-        if (not self.baseline or self.baseline <= 0) and self.right_camera_yaml:
+        if self.right_camera_yaml:
             try:
                 with open(self.right_camera_yaml, 'r') as f:
                     cam_r = yaml.safe_load(f)
                 P_r = cam_r.get('projection_matrix', {}).get('data', None)
-                if P_r and len(P_r) == 12 and self.fx > 0:
-                    Tx = float(P_r[3])
-                    if abs(Tx) > 0:
-                        self.baseline = -Tx / self.fx
-                        rospy.loginfo('Derived baseline %.6f m from right camera YAML %s', self.baseline, self.right_camera_yaml)
+                if P_r and len(P_r) == 12:
+                    Tx_right = float(P_r[3])
+                rospy.loginfo('Loaded right projection from %s: Tx_right=%s', self.right_camera_yaml, str(Tx_right))
             except Exception as e:
                 rospy.logwarn('Failed to load right camera YAML %s: %s', self.right_camera_yaml, str(e))
+
+        # Compute baseline preference: both cameras -> (Tx_left - Tx_right)/fx; else single-camera fallback
+        if self.fx > 0:
+            if Tx_left is not None and Tx_right is not None:
+                self.baseline = (Tx_left - Tx_right) / self.fx
+                rospy.loginfo('Derived baseline from both cameras: (Tx_left - Tx_right)/fx = (%.6f - %.6f)/%.6f = %.6f m', Tx_left, Tx_right, self.fx, self.baseline)
+            elif Tx_right is not None:
+                # Standard right P has Tx = -fx * baseline
+                self.baseline = -Tx_right / self.fx
+                rospy.loginfo('Derived baseline from right camera only: -Tx_right/fx = -%.6f/%.6f = %.6f m', Tx_right, self.fx, self.baseline)
+            elif Tx_left is not None:
+                # Some setups encode Tx in left P
+                self.baseline = -Tx_left / self.fx
+                rospy.loginfo('Derived baseline from left camera only: -Tx_left/fx = -%.6f/%.6f = %.6f m', Tx_left, self.fx, self.baseline)
 
         # Publishers
         self.flow_pub = rospy.Publisher('~flow', Image, queue_size=1)

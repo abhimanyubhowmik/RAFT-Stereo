@@ -23,6 +23,6 @@ rectification_matrix: # Assuming perfectly rectified output from simulator
 projection_matrix: # P = [K | [0;0;0]] for left rectified camera
   rows: 3
   cols: 4
-  data: [160.0,   0.0, 160.0,   0.0,  # Note: P[3] = Tx = 0.0
+  data: [160.0,   0.0, 160.0,   16.0,  # Note: P[3] = Tx = 0.0
            0.0, 160.0, 120.0,   0.0,
            0.0,   0.0,   1.0,   0.0]
