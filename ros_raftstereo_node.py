@@ -110,8 +110,11 @@ class RAFTStereoNode:
         self.flow_pub = rospy.Publisher('~flow', Image, queue_size=1)
         self.conf_pub = rospy.Publisher('~confidence', Image, queue_size=1)
         self.depth_pub = rospy.Publisher('~depth', Image, queue_size=1)
+        self.depth_filtered_pub = rospy.Publisher('~depth_filtered', Image, queue_size=1)
+        self.conf_filtered_pub = rospy.Publisher('~confidence_filtered', Image, queue_size=1)
         self.depth_raw_pub = rospy.Publisher('~depth_raw', Image, queue_size=1) if self.publish_raw_depth else None
         self.pc_pub = rospy.Publisher('~points', PointCloud2, queue_size=1)
+        self.pc_filtered_pub = rospy.Publisher('~points_filtered', PointCloud2, queue_size=1)
 
         # Build RAFTStereo args-like object
         class Args:
@@ -159,6 +162,14 @@ class RAFTStereoNode:
         right_sub = message_filters.Subscriber(self.right_topic, Image)
         ts = message_filters.ApproximateTimeSynchronizer([left_sub, right_sub], queue_size=10, slop=0.05)
         ts.registerCallback(self.callback)
+
+        # Subscribers for filtered images
+        left_filtered_topic = '/alphasense_driver_ros/cam1_filtered'
+        right_filtered_topic = '/alphasense_driver_ros/cam0_filtered'
+        left_filtered_sub = message_filters.Subscriber(left_filtered_topic, Image)
+        right_filtered_sub = message_filters.Subscriber(right_filtered_topic, Image)
+        ts_filtered = message_filters.ApproximateTimeSynchronizer([left_filtered_sub, right_filtered_sub], queue_size=10, slop=0.05)
+        ts_filtered.registerCallback(self.callback_filtered)
 
     def _rosimg_to_torch(self, msg):
         cv_img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
@@ -322,6 +333,102 @@ class RAFTStereoNode:
                 rospy.loginfo('Published point cloud with %d points', points.shape[0])
         except Exception:
             rospy.logerr('RAFTStereo inference error:\n%s', traceback.format_exc())
+
+    def callback_filtered(self, left_msg, right_msg):
+        try:
+            if self.debug:
+                rospy.loginfo('Filtered callback: left enc=%s right enc=%s', getattr(left_msg, 'encoding', 'n/a'), getattr(right_msg, 'encoding', 'n/a'))
+
+            image1 = self._rosimg_to_torch(left_msg)
+            image2 = self._rosimg_to_torch(right_msg)
+            if self.debug:
+                rospy.loginfo('Filtered input shapes: %s %s', tuple(image1.shape), tuple(image2.shape))
+
+            padder = InputPadder(image1.shape, divis_by=32)
+            image1_p, image2_p = padder.pad(image1, image2)
+            if self.debug:
+                rospy.loginfo('Filtered padded shapes: %s %s', tuple(image1_p.shape), tuple(image2_p.shape))
+
+            with torch.no_grad():
+                out = self.model(image1_p, image2_p, iters=self.valid_iters, test_mode=True)
+                # Forward returns: flow_low, flow_up, corr_confidence, prior_confidence
+                flow_low, flow_up, corr_confidence, _ = out
+
+            flow_up = padder.unpad(flow_up).squeeze(0)
+            if self.debug:
+                rospy.loginfo('Filtered flow shape after unpad: %s', tuple(flow_up.shape))
+
+            if self.compute_confidence:
+                # corr_confidence is [N,H,W]; add channel for unpad
+                if corr_confidence.dim() == 3:
+                    conf = padder.unpad(corr_confidence.unsqueeze(1)).squeeze(1)
+                else:
+                    conf = padder.unpad(corr_confidence)
+                # conf is [N,H,W]; upsample if needed
+                if conf.shape[-2:] != flow_up.shape[-2:]:
+                    conf = torch.nn.functional.interpolate(conf.unsqueeze(1), size=flow_up.shape[-2:], mode='bilinear', align_corners=True).squeeze(1)
+                conf = conf.squeeze(0)
+                conf_np = conf.detach().cpu().numpy().astype(np.float32)
+            else:
+                conf = None
+                conf_np = None
+
+            disp = flow_up[:, :, :]
+            if disp.shape[0] > 1:
+                disp = disp[0:1, :, :]
+
+            # Compute depth from filtered images
+            depth, depth_masked = self.compute_depth_from_disp(disp.squeeze(0), conf)
+            # Apply scaling
+            if depth is not None:
+                scale = float(self.depth_scale)
+                depth = depth * scale
+                if depth_masked is not None:
+                    depth_masked = depth_masked * scale
+
+            # Create header for filtered frame
+            depth_filtered_header = Header()
+            depth_filtered_header.stamp = left_msg.header.stamp
+            depth_filtered_header.frame_id = 'camera_depth_optical_frame_filtered'
+
+            # Publish filtered confidence
+            if conf_np is not None:
+                conf_filtered_msg = self.bridge.cv2_to_imgmsg(conf_np, encoding='32FC1')
+                conf_filtered_msg.header = depth_filtered_header
+                self.conf_filtered_pub.publish(conf_filtered_msg)
+
+            if depth is None:
+                if self.debug:
+                    rospy.logwarn('Skipping filtered depth: invalid fx(%.3f) or baseline(%.6f)', self.fx, self.baseline)
+                return
+
+            depth_np = depth.detach().cpu().numpy().astype(np.float32)
+
+            # Publish filtered depth with camera_depth_optical_frame_filtered frame_id
+            depth_filtered_msg = self.bridge.cv2_to_imgmsg(depth_np, encoding='32FC1')
+            depth_filtered_msg.header = depth_filtered_header
+            self.depth_filtered_pub.publish(depth_filtered_msg)
+
+            # Publish filtered point cloud (use masked depth if configured)
+            depth_for_pc = depth_masked.detach().cpu().numpy().astype(np.float32) if (self.pc_use_masked_depth and depth_masked is not None) else depth_np
+            points = self.depth_to_pointcloud(depth_for_pc)
+            if points is None or points.size == 0:
+                if self.debug:
+                    valid_count = np.isfinite(depth_for_pc).sum()
+                    rospy.logwarn('No valid filtered 3D points: valid depth count=%d (threshold=%.2f, use_masked=%s)', int(valid_count), self.conf_threshold, str(self.pc_use_masked_depth))
+                return
+
+            fields = [
+                PointField('x', 0, PointField.FLOAT32, 1),
+                PointField('y', 4, PointField.FLOAT32, 1),
+                PointField('z', 8, PointField.FLOAT32, 1),
+            ]
+            pc_filtered_msg = pc2.create_cloud(depth_filtered_header, fields, points)
+            self.pc_filtered_pub.publish(pc_filtered_msg)
+            if self.debug:
+                rospy.loginfo('Published filtered depth with frame_id: %s, point cloud with %d points', depth_filtered_header.frame_id, points.shape[0])
+        except Exception:
+            rospy.logerr('RAFTStereo filtered inference error:\n%s', traceback.format_exc())
 
 
 def main():
